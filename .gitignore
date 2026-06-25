@@ -1,25 +1,10 @@
-# Go
-server/bin/
-*.exe
-*.test
-*.out
-
-# Rust
+# build artifacts
+deploy/layer/
+deploy/layer.zip
+**/__pycache__/
+*.pyc
+.pytest_cache/
 cli/target/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Config
-config.local.yaml
-*.env
-
-# Data
-data/
+server/.venv/
+.env
+.superpowers/
