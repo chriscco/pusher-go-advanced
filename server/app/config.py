@@ -18,6 +18,7 @@ class Settings:
     email_smtp_port: int
     email_from: str
     email_password: str
+    timer_secret: str
 
 
 def load_settings() -> Settings:
@@ -38,4 +39,5 @@ def load_settings() -> Settings:
         email_smtp_port=int(os.environ.get("EMAIL_SMTP_PORT", "587")),
         email_from=os.environ.get("EMAIL_FROM", ""),
         email_password=os.environ.get("EMAIL_PASSWORD", ""),
+        timer_secret=os.environ.get("TIMER_SECRET", ""),
     )

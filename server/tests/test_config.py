@@ -39,3 +39,10 @@ def test_load_settings_missing_required_raises(monkeypatch):
 
     with pytest.raises(RuntimeError):
         load_settings()
+
+
+def test_timer_secret_optional(monkeypatch):
+    for key in ("MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"):
+        monkeypatch.setenv(key, "x")
+    monkeypatch.delenv("TIMER_SECRET", raising=False)
+    assert load_settings().timer_secret == ""

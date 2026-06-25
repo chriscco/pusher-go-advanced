@@ -1,7 +1,9 @@
 from fastapi import FastAPI
-from app.api import auth, portfolio, report
+from app.api import auth, portfolio, report, job, timer
 
 app = FastAPI(title="pusher-go-advanced")
 app.include_router(auth.router)
 app.include_router(portfolio.router)
 app.include_router(report.router)
+app.include_router(job.router)
+app.include_router(timer.router)
