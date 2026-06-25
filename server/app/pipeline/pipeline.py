@@ -13,7 +13,12 @@ def _holdings_lines(provider, holdings):
     lines = []
     for h in holdings:
         q = provider.get_stock_quote(h["symbol"], h["market"])
-        price = "数据暂不可用" if q.price is None else f"{q.price} ({q.change_pct:+.2f}%)"
+        if q.price is None:
+            price = "数据暂不可用"
+        elif q.change_pct is None:
+            price = f"{q.price}"
+        else:
+            price = f"{q.price} ({q.change_pct:+.2f}%)"
         qty = "" if h["quantity"] is None else f" 持有{h['quantity']}"
         lines.append(f"{h['symbol']} {h.get('name') or ''} {price}{qty}")
     return lines
