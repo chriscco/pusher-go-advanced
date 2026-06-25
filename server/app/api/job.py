@@ -16,7 +16,7 @@ def trigger(background: BackgroundTasks, user=Depends(get_current_user)):
 @router.get("/job/{job_id}")
 def job_status(job_id: str, user=Depends(get_current_user)):
     row = job_model.get_job(job_id)
-    if not row:
+    if not row or (row["user_id"] is not None and row["user_id"] != user["id"]):
         raise HTTPException(status_code=404, detail="job not found")
     rd = row["report_date"]
     return {

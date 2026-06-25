@@ -23,9 +23,9 @@ def client():
     return TestClient(app)
 
 
-def _auth(client):
+def _auth(client, email="a@x.com"):
     token = client.post(
-        "/register", json={"email": "a@x.com", "password": "pw"}
+        "/register", json={"email": email, "password": "pw"}
     ).json()["token"]
     return {"Authorization": f"Bearer {token}"}
 
@@ -53,3 +53,16 @@ def test_timer_requires_secret(client):
     assert client.post("/internal/timer").status_code == 401
     ok = client.post("/internal/timer", headers={"X-Timer-Secret": "s3cr3t"})
     assert ok.status_code == 202
+
+
+def test_job_status_not_visible_to_other_user(client):
+    alice = _auth(client, email="alice@x.com")
+    r = client.post("/trigger-report", headers=alice)
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    bob = _auth(client, email="bob@x.com")
+    assert client.get(f"/job/{job_id}", headers=bob).status_code == 404
+
+    # sanity: alice can still read her own job
+    assert client.get(f"/job/{job_id}", headers=alice).status_code == 200
