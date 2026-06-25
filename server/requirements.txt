@@ -6,4 +6,6 @@ efinance==0.5.0
 yfinance==0.2.43
 fastapi==0.115.0
 uvicorn==0.30.6
+email-validator==2.2.0
+httpx==0.27.2
 pytest==8.3.3
