@@ -17,7 +17,8 @@ class MarketDataProvider:
             return cached
 
         quote = self._fetch(symbol, market)
-        self.cache.set(ckey, quote)
+        if quote.price is not None:
+            self.cache.set(ckey, quote)
         return quote
 
     def _fetch(self, symbol, market) -> StockQuote:
