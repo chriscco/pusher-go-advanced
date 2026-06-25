@@ -1,0 +1,35 @@
+import httpx
+from app.config import load_settings
+
+_DEFAULT_ENDPOINT = "https://api.deepseek.com"
+
+
+def _default_poster(url, headers, payload) -> dict:
+    resp = httpx.post(url, headers=headers, json=payload, timeout=120.0)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def chat(messages, model, *, api_key=None, endpoint=None, poster=None) -> str:
+    s = load_settings()
+    api_key = api_key or s.deepseek_api_key
+    endpoint = (endpoint or _DEFAULT_ENDPOINT).rstrip("/")
+    poster = poster or _default_poster
+    url = f"{endpoint}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"model": model, "messages": messages}
+    data = poster(url, headers, payload)
+    return data["choices"][0]["message"]["content"]
+
+
+def resolve_model_config(user) -> dict:
+    s = load_settings()
+    if user and user.get("model_key"):
+        return {
+            "api_key": user["model_key"],
+            "endpoint": user.get("model_endpoint") or _DEFAULT_ENDPOINT,
+        }
+    return {"api_key": s.deepseek_api_key, "endpoint": _DEFAULT_ENDPOINT}
