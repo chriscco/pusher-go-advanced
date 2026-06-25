@@ -21,3 +21,7 @@ def get_user_by_token(token):
 
 def set_user_token(user_id, token) -> None:
     mysql.execute("UPDATE users SET token = %s WHERE id = %s", (token, user_id))
+
+
+def list_all_users():
+    return mysql.query("SELECT * FROM users ORDER BY id")

@@ -36,3 +36,11 @@ def test_set_user_token():
     user.set_user_token(uid, "new")
     assert user.get_user_by_token("old") is None
     assert user.get_user_by_token("new")["id"] == uid
+
+
+def test_list_all_users():
+    user.create_user("a@x.com", "h", "a@x.com", "t1")
+    user.create_user("b@x.com", "h", "b@x.com", "t2")
+    rows = user.list_all_users()
+    emails = {r["email"] for r in rows}
+    assert {"a@x.com", "b@x.com"}.issubset(emails)
