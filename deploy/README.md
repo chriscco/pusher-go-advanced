@@ -1,0 +1,58 @@
+# 部署手册
+
+## 0. 准备
+- 腾讯云账号，开通 SCF / API 网关 / CDB(MySQL) / COS。
+- 本机安装 Docker（构建依赖层）与 Serverless Framework：`npm i -g serverless`。
+- 配置腾讯云凭证：`export TENCENT_SECRET_ID=... TENCENT_SECRET_KEY=...`。
+
+## 1. 数据库
+1. 创建 CDB MySQL（最小 1核1G），库名 `pusher`。
+2. 应用建表脚本：
+   ```bash
+   mysql -h <host> -u <user> -p pusher < sql/schema.sql
+   ```
+3. 安全组只放行 SCF 出口网段访问 3306。
+4. （可选）插入初始 RSS 源：
+   ```sql
+   INSERT INTO rss_sources (name, url, category) VALUES
+     ('华尔街见闻', 'https://dedicated-feed-url', 'business');
+   ```
+
+## 2. 依赖层
+```bash
+bash deploy/build_layer.sh           # 产出 deploy/layer.zip
+```
+在 SCF 控制台 → 层管理 → 新建层，运行时 Python3.10，上传 `layer.zip`（>50MB 经 COS）。记下层名 `pusher-deps` 与版本号，回填 `serverless.yml` 的 `layers`。
+
+## 3. 环境变量
+导出全部机密（见 spec §7.2 + `TIMER_SECRET`）：
+```bash
+export MYSQL_HOST=... MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=pusher
+export MYSQL_PORT=3306
+export DEEPSEEK_API_KEY=... DEEPSEEK_MODEL=deepseek-chat PLANNER_MODEL=deepseek-r1
+export EMAIL_SMTP_HOST=smtp.gmail.com EMAIL_SMTP_PORT=587 EMAIL_FROM=... EMAIL_PASSWORD=...
+export TIMER_SECRET=$(openssl rand -hex 16)
+```
+把 `serverless.yml` 里 timer 的 `argument` 改为与 `TIMER_SECRET` 相同的值。
+
+## 4. 部署
+```bash
+cd deploy && serverless deploy
+```
+输出里记下 API 网关 HTTPS 地址。
+
+## 5. 烟测
+```bash
+curl https://<apigw-host>/health        # 期望 {"status":"ok"}
+```
+用 CLI 走通注册→加持仓→触发：
+```bash
+export PUSHER_ENDPOINT=https://<apigw-host>
+pusher register --email you@x.com
+pusher portfolio add-stock 600519 --quantity 100
+pusher trigger run                       # 触发并轮询至 done
+pusher report today
+```
+
+## 6. 验证定时
+等次日 8:00，或在控制台手动触发 timer，确认收到日报邮件、`reports` 表有当日记录、`jobs` 表对应 job 为 done。
