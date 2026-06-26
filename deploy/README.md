@@ -1,12 +1,20 @@
 # 部署手册
 
-每日日报部署到腾讯云 SCF。**架构** = **Event 函数 `pusher-pipeline` + 每日 08:00 Timer**，
-依赖打成 **Layer**（挂载到 `/opt/python`），函数代码包只含 `app/`。
+部署到腾讯云 SCF，**两个函数共用一个依赖 Layer**（挂载到 `/opt/python`，函数代码包只含 `app/`）：
 
-> **为什么不走 serverless 组件 / HTTP 函数？** 该账号 **API 网关已停售**，SCF 的
-> HTTP/Web 函数只能挂 `apigw` 触发器（**不能挂 timer**），且 serverless-tencent 组件
-> 在本环境不可用（v4 需登录、v3 在 CN 被地域限制）。因此改为直接用 **SCF SDK** 部署一个
-> 定时驱动的 Event 函数。CLI 的 HTTP API 因此**暂未上云**，用户/持仓暂用 SQL 维护。
+- **Event 函数 `pusher-pipeline` + 每日 08:00 Timer** —— 定时日报流水线。
+- **Web 函数 `pusher-go-advanced`（uvicorn）+ 函数 URL** —— CLI 的 HTTP API。
+
+> **为什么是这套？** 该账号 **API 网关已停售**（2024-07-01 起不能新建触发器，2025-06-30
+> 触发器下线），SCF 的 HTTP/Web 函数也只能挂 `apigw` 触发器（**不能挂 timer**），且
+> serverless-tencent 组件在本环境不可用（v4 需登录、v3 在 CN 被地域限制）。所以：
+> - HTTP API 用 **函数 URL** 暴露——这是 API 网关停售后的官方替代，给函数一个**永久公网
+>   HTTPS 端点**（`https://<app-id>-<url-id>.<region>.tencentscf.com`），不依赖网关。
+> - 定时日报用单独的 **Event 函数 + Timer**（timer 只能挂事件函数）。
+>
+> **函数 URL 需在控制台为该 Web 函数手动启用一次**（授权类型选「开放」，鉴权交给后端的
+> bearer token）。SDK 3.1.100 既不能开启、也读不到它，故启用后把永久地址写入
+> `deploy/.env` 的 `API_FUNCTION_URL`，`deploy.sh` 会据此打印 CLI 接入命令。
 
 ## 一键部署
 
@@ -22,10 +30,16 @@ bash deploy/deploy.sh
 1. 在 `python:3.10-slim` **(linux/amd64)** 内装依赖并精简（strip `.so`、去 pytest、删 tests，
    并把 efinance 缓存目录改到 `/tmp`）→ 打成 `layer.zip`；
 2. 用 `publish_layer.py` 上传 COS 并发布 **Layer 版本**；
-3. 用 `deploy_scf.py` 创建/更新 **Event 函数** 并幂等挂上**每日 Timer**（`TIMER_SECRET`
-   同时注入函数环境变量与触发器 `CustomArgument`，自动保持一致）。
+3. 用 `deploy_scf.py` 创建/更新 **Event 函数 `pusher-pipeline`** 并幂等挂上**每日 Timer**
+   （`TIMER_SECRET` 同时注入函数环境变量与触发器 `CustomArgument`，自动保持一致）；
+4. 再用 `deploy_scf.py` 创建/更新 **Web 函数 `pusher-go-advanced`**（HTTP 类型，handler
+   `scf_bootstrap`），并打印其**函数 URL** 与 CLI 接入命令（地址取自 `API_FUNCTION_URL`）。
 
 脚本可重复执行（幂等）：函数已存在则只更新代码与配置，Timer 先删后建。
+
+> 首次启用函数 URL：第一次部署后，到控制台为 `pusher-go-advanced` 开启「函数 URL」
+> （授权类型「开放」），把永久地址写进 `deploy/.env` 的 `API_FUNCTION_URL`，再跑一次脚本，
+> 末尾就会打印 `pusher` 的接入命令。之后 CLI 直接 `pusher register/portfolio/trigger/report`。
 
 ## 关键约束（脚本已处理）
 
@@ -61,6 +75,8 @@ REVIEWER_MODEL=kimi-k2.6            # 主编终审
 # 邮件 + 定时密钥
 EMAIL_SMTP_HOST=smtp.qq.com  EMAIL_SMTP_PORT=587  EMAIL_FROM=...  EMAIL_PASSWORD=...
 TIMER_SECRET=$(openssl rand -hex 16)
+# CLI HTTP API 的函数 URL（控制台手动启用后填，地址永久不变；SDK 读不到，此处记一次）
+API_FUNCTION_URL=https://<app-id>-<url-id>.ap-shanghai.tencentscf.com
 ```
 
 > 模型名必须与供应商实际型号一致（可用 `GET /v1/models` 查 Moonshot 型号；Moonshot 的

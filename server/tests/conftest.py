@@ -5,6 +5,24 @@ import pytest
 
 SCHEMA_PATH = pathlib.Path(__file__).resolve().parents[2] / "sql" / "schema.sql"
 
+
+def pytest_configure(config):
+    """Refuse to run against a non-test database.
+
+    The ``db_conn`` fixture wipes every table before each test, so pointing
+    MYSQL_DATABASE at a real database (e.g. via ``source deploy/.env``) would
+    destroy production data. Require a name ending in ``_test`` unless the
+    operator explicitly opts out with ALLOW_NONTEST_DB=1.
+    """
+    db = os.environ.get("MYSQL_DATABASE", "pusher_test")
+    if not db.endswith("_test") and os.environ.get("ALLOW_NONTEST_DB") != "1":
+        raise pytest.UsageError(
+            f"refusing to run the test suite against database {db!r}: it DELETEs "
+            f"all rows from every table before each test. Use a database whose "
+            f"name ends with '_test' (e.g. pusher_test), or set ALLOW_NONTEST_DB=1 "
+            f"to override. Never point MYSQL_DATABASE at the production database."
+        )
+
 # 删除顺序：先删有外键依赖的子表，再删父表
 _TABLES_IN_DELETE_ORDER = [
     "reports",

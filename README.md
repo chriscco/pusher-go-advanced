@@ -110,8 +110,13 @@ Health check: `GET /health` → `{"status": "ok"}`.
 
 ```bash
 cd server
-pytest          # requires a reachable MySQL; network/LLM/SMTP are mocked
+MYSQL_DATABASE=pusher_test pytest    # network/LLM/SMTP are mocked
 ```
+
+> ⚠️ The suite **wipes every table before each test**, so it refuses to run unless
+> `MYSQL_DATABASE` ends in `_test` (override with `ALLOW_NONTEST_DB=1`). **Never** point
+> it at the production database — in particular, don't `source deploy/.env` before running
+> tests.
 
 ## CLI (`pusher`)
 
@@ -173,14 +178,20 @@ bash deploy/deploy.sh
 ```
 
 `deploy.sh` builds the dependencies as a **linux/amd64 Layer**, publishes it to COS, then
-creates/updates an **Event function** (`pusher-pipeline`) and attaches a **daily 08:00
-Timer**. Full details and gotchas are in [`deploy/README.md`](deploy/README.md).
+deploys two functions sharing that layer:
 
-> **Why only the daily run, not the HTTP API?** API Gateway has been discontinued
-> ("停止售卖") on the target account, and SCF HTTP/Web functions accept only `apigw`
-> triggers (no timer). So the cloud deployment runs the pipeline as a timer-driven
-> Event function; the FastAPI HTTP API still runs locally and is fully tested, but is
-> not currently cloud-hosted. Users / portfolios are managed directly via SQL.
+- an **Event function** (`pusher-pipeline`) with a **daily 08:00 Timer** — the scheduled run;
+- a **Web function** (`pusher-go-advanced`) running uvicorn — the FastAPI **HTTP API**,
+  exposed publicly through a **Function URL**.
+
+Full details and gotchas are in [`deploy/README.md`](deploy/README.md).
+
+> **A note on API Gateway.** API Gateway was discontinued ("停止售卖") on the target
+> account, and SCF HTTP/Web functions can't carry a timer. So the HTTP API is exposed
+> via a **Function URL** (the official API-Gateway replacement: a permanent public
+> HTTPS endpoint, no gateway needed), while the timer-driven daily run is a separate
+> Event function. The Function URL must be enabled once in the console (SDK can't yet
+> toggle it); its address then goes in `deploy/.env` as `API_FUNCTION_URL`.
 
 > Note: `akshare` / `efinance` / `yfinance` rely on unofficial upstream endpoints —
 > run one real smoke call per library before a first production deploy.
