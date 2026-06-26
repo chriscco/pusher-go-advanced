@@ -1,3 +1,5 @@
+import sys
+
 from app.config import load_settings
 from app.models import user as user_model
 from app.models import portfolio as pf_model
@@ -71,6 +73,15 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
     return count
 
 
+def _safe_source(label, fn, default):
+    """单个数据源失败不影响整体：记录并降级为默认值（graceful degradation）。"""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 — 外部数据源各异，统一兜底
+        print(f"[pipeline] 数据源 {label} 获取失败，降级为空: {e!r}", file=sys.stderr)
+        return default
+
+
 def _default_runner():
     from app.data.provider import MarketDataProvider
     from app.data.ak import AkSource
@@ -80,9 +91,9 @@ def _default_runner():
 
     provider = MarketDataProvider(AkSource(), EfSource(), YfSource())
     bundle = {
-        "indices": market.get_index_quotes(),
-        "sectors": market.get_sector_ranking(),
-        "news": market.fetch_news(_load_rss_sources()),
+        "indices": _safe_source("indices", market.get_index_quotes, []),
+        "sectors": _safe_source("sectors", market.get_sector_ranking, []),
+        "news": _safe_source("news", lambda: market.fetch_news(_load_rss_sources()), []),
     }
     report_date = beijing_today()
     run_pipeline(

@@ -28,6 +28,19 @@ def fake_chat(messages, model):
     return f"OUT[{messages[-1]['content'][:6]}]"
 
 
+def test_safe_source_returns_value_on_success():
+    assert pipeline._safe_source("x", lambda: [1, 2], []) == [1, 2]
+
+
+def test_safe_source_degrades_on_failure(capsys):
+    def boom():
+        raise ConnectionError("Remote end closed connection")
+
+    out = pipeline._safe_source("indices", boom, [])
+    assert out == []
+    assert "indices" in capsys.readouterr().err
+
+
 def test_run_pipeline_saves_report_and_emails():
     uid = user.create_user("u@x.com", "h", "to@x.com", "tok")
     portfolio.add_portfolio(uid, "600519", "茅台", "stock", "cn", 100, None)
