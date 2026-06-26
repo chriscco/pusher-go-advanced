@@ -2,39 +2,41 @@
 
 ## 一键部署（推荐）
 
-先建好数据库（见下方第 1 节），export 好机密，然后：
+> **架构说明**：该账号 **API 网关已停售**、HTTP/Web 函数**不能挂 timer**、
+> serverless-tencent 组件在本环境不可用。因此**不走 serverless 组件**，改为直接用
+> SCF SDK 部署。每日日报 = **Event 函数 `pusher-pipeline` + 每日 08:00 Timer**；
+> 依赖打成 **Layer**（挂载到 `/opt/python`），函数代码包只含 `app/`。
+> CLI 的 HTTP API 因 API 网关停售**暂未部署**，用户/持仓暂用 SQL 维护。
+
+先建好数据库（见下方第 1 节）、装好 Docker 与 `server/.venv`，然后：
 
 ```bash
-export MYSQL_HOST=... MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=pusher
-export TENCENT_SECRET_ID=... TENCENT_SECRET_KEY=...
-export DEEPSEEK_API_KEY=...                 # 其余可选项见脚本顶部
+source deploy/.env          # 内含 MYSQL_* / TENCENT_* / DEEPSEEK_* / KIMI_* / EMAIL_* / TIMER_SECRET
 bash deploy/deploy.sh
 ```
 
-`deploy.sh` 会：构建带依赖的函数包（Docker 内装，与运行时对齐）→ 注入环境变量与
-`TIMER_SECRET`（未提供则自动生成）→ `serverless deploy` 出函数 + API 网关 + 每日
-08:00 Timer。**依赖直接打进函数包，无需手动建层上传 layer.zip。**
+`deploy.sh` 全自动完成：
+1. 在 `python:3.10-slim` **(linux/amd64)** 内装依赖并精简（strip .so、去 pytest、删 tests，
+   并把 efinance 缓存目录改到 `/tmp`）→ 打成 `layer.zip`；
+2. 用 `publish_layer.py` 上传 COS 并发布 **Layer 版本**；
+3. 用 `deploy_scf.py` 创建/更新 **Event 函数** 并幂等挂上**每日 Timer**（`TIMER_SECRET`
+   同时注入函数环境变量与触发器 `CustomArgument`，自动一致）。
 
-> 偏好「依赖层」方案的话，跳过本脚本，按下面的分步手册（第 2 节用 `build_layer.sh` +
-> 控制台建层 + `serverless.yml`）操作。
+关键约束（已在脚本里处理）：
 
-### 数据库走内网（如 TDSQL-C 只暴露内网地址）
+- **必须 amd64**：SCF 运行时是 x86_64，Apple Silicon 默认的 arm64 包会让 numpy 等崩溃。
+- **依赖走 Layer**：全打进函数代码包会超 SCF 体积限制。
+- **`/opt/python` 上 sys.path**：Event 函数不跑 `scf_bootstrap`，且 SCF 禁止设置
+  `PYTHONPATH` 环境变量，故 `scf_event_handler.py` 自行把 `/opt/python` 插入 `sys.path`。
+- **只有 `/tmp` 可写**：handler 里设 `HOME=/tmp`。
 
-`MYSQL_HOST` 填内网 IP/域名，并把函数绑定到数据库所在的 **VPC + 子网**：
+> `serverless.yml` / `build_layer.sh` 及下方「分步手册」为旧的 serverless 组件方案，
+> 在本账号不可用，仅作历史参考。
 
-```bash
-export VPC_ID=vpc-xxxx SUBNET_ID=subnet-xxxx   # 见 TDSQL-C 实例「网络信息」
-bash deploy/deploy.sh
-```
+### 数据库
 
-注意两点：
-
-- **公网出口**：函数绑定 VPC 后默认无公网出口，需为函数另开「公网访问」或在 VPC
-  挂 NAT 网关，否则 DeepSeek / yfinance / akshare / SMTP / RSS 等外网调用会超时。
-- **建表**：本地连不到内网库，用腾讯云 **DMC 控制台** 的 SQL 窗口执行 `sql/schema.sql`，
-  或临时为 TDSQL-C 开启外网地址执行完再关闭。
-- `vpcConfig` 字段名以你所用 serverless `scf` 组件版本为准，若部署报字段无法识别，
-  改用 `vpc`。
+`MYSQL_HOST` 用 TDSQL-C **外网地址**即可（函数默认有公网出口）。本地连不到内网库时，
+用腾讯云 **DMC 控制台** 的 SQL 窗口执行 `sql/schema.sql`，或临时开外网地址执行完再关。
 
 ---
 

@@ -48,6 +48,27 @@ def zip_dir(src: str, dst: str) -> None:
                     z.writestr(zi, fh.read())
 
 
+def _ensure_timer(cli, fn, secret, cron, name="daily-pipeline") -> None:
+    try:
+        d = models.DeleteTriggerRequest()
+        d.FunctionName = fn
+        d.TriggerName = name
+        d.Type = "timer"
+        d.TriggerDesc = cron
+        cli.DeleteTrigger(d)
+    except TencentCloudSDKException:
+        pass  # 不存在则忽略
+    t = models.CreateTriggerRequest()
+    t.FunctionName = fn
+    t.TriggerName = name
+    t.Type = "timer"
+    t.TriggerDesc = cron
+    t.Enable = "OPEN"
+    t.CustomArgument = secret
+    cli.CreateTrigger(t)
+    print(f"[scf] timer '{name}' -> {cron}", file=sys.stderr)
+
+
 def _wait_active(cli, fn, tries=40) -> None:
     for _ in range(tries):
         g = models.GetFunctionRequest()
@@ -143,6 +164,16 @@ def main() -> int:
             print(f"[scf] CreateFunction FAILED: code={e.get_code()} msg={e.get_message()}",
                   file=sys.stderr)
             return 1
+
+    # 幂等地挂上每日 Timer（Event 函数才支持）
+    if os.environ.get("ENSURE_TIMER") == "1":
+        _wait_active(cli, fn)
+        _ensure_timer(
+            cli, fn,
+            os.environ.get("TIMER_SECRET", ""),
+            os.environ.get("TIMER_CRON", "0 0 8 * * * *"),
+        )
+
     print(f"FUNCTION={fn}")
     return 0
 
