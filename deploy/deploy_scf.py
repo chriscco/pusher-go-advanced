@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""直接用 SCF SDK 部署 Web 函数（绕开 serverless-tencent 组件）。
+"""直接用 SCF SDK 部署函数（绕开 serverless-tencent 组件）。
 
-流程: 打包代码 zip -> 上传 COS -> CreateFunction/UpdateFunction（Web 类型，
-引用 Layer + 注入环境变量）。报错时打印 SDK 的精确错误信息。
+流程: 打包代码 zip -> 上传 COS -> CreateFunction/UpdateFunction（引用 Layer +
+注入环境变量），可选幂等挂上每日 Timer。报错时打印 SDK 的精确错误信息。
+FUNCTION_TYPE=Event（默认日报流水线）或 HTTP（Web 函数）。
 
 环境变量:
   TENCENT_SECRET_ID / TENCENT_SECRET_KEY

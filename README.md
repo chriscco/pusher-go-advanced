@@ -3,41 +3,51 @@
 An RSS + market-data **AI daily-report pusher**. A multi-agent pipeline reads each
 user's portfolio and curated RSS feeds, pulls quotes from free market-data libraries,
 generates a daily analysis report with an LLM, persists it, and emails it out. A
-cross-platform Rust CLI drives the whole thing.
+cross-platform Rust CLI drives the backend HTTP API.
 
-The backend is a **Python / FastAPI** app packaged as a **Tencent SCF web function**
-(uvicorn behind API Gateway), with a **Timer trigger** for the scheduled 08:00 run.
+The backend is a **Python / FastAPI** app. In production the scheduled daily run is
+deployed to **Tencent SCF** as an **Event function + Timer trigger** (08:00 Beijing).
+See [Deployment](#deployment) for why the HTTP API is not currently cloud-hosted.
 
 ## Architecture
 
 ```
 ┌──────────┐   HTTPS    ┌─────────────────────────────┐
-│ Rust CLI │ ─────────► │  FastAPI (SCF web function) │
+│ Rust CLI │ ─────────► │  FastAPI backend            │
 │ (pusher) │            │  auth · portfolio · report  │
 └──────────┘            │  trigger/job · timer        │
                         └──────────────┬──────────────┘
                                        │
                   ┌────────────────────┼─────────────────────┐
                   ▼                    ▼                      ▼
-            MySQL (PyMySQL)   Market data providers      DeepSeek LLM
+            MySQL (PyMySQL)   Market data providers      LLM pipeline
             users/portfolios  akshare → efinance (cn)    Planner → market/
             reports/jobs/...   yfinance (hk/us)          news/sector agents →
                               RSS via feedparser         per-user advisor →
                                                          Reviewer
 ```
 
-Triggering a report is **asynchronous**: `trigger-report` returns a `job_id`
-immediately (HTTP 202), the pipeline runs in the background as a job state machine,
-and the CLI polls the job until it finishes (avoiding the API Gateway timeout).
+**Multi-agent pipeline.** A Planner drafts the run; market / news / sector analyst
+agents gather and summarize data; a per-user advisor tailors it to each portfolio; a
+Reviewer assembles the final HTML report. Each external data source is isolated so a
+single upstream failure degrades gracefully instead of killing the job.
+
+**Dual LLM providers.** Calls are routed by model-name prefix: `kimi-*` / `moonshot-*`
+go to **Moonshot (Kimi)**, everything else to **DeepSeek**. Roles map to models via
+`PLANNER_MODEL` / `ANALYST_MODEL` / `REVIEWER_MODEL`, so you can mix providers per role.
+
+**Asynchronous triggering.** `trigger-report` returns a `job_id` immediately (HTTP 202),
+the pipeline runs in the background as a job state machine, and the CLI polls the job
+until it finishes.
 
 ## Repository layout
 
 | Path | What it is |
 |------|------------|
-| `server/`  | FastAPI backend, agent pipeline, data layer, DB models, tests |
+| `server/`  | FastAPI backend, agent pipeline, data layer, DB models, SCF handlers, tests |
 | `cli/`     | Rust CLI (`pusher`) — clap commands, config + token persistence |
 | `sql/`     | `schema.sql` — MySQL schema (users, portfolios, fund_holdings, reports, rss_sources, jobs) |
-| `deploy/`  | `serverless.yml`, `build_layer.sh`, bootstrap, deploy notes |
+| `deploy/`  | One-click SCF deploy (`deploy.sh`, `deploy_scf.py`, `publish_layer.py`) + notes |
 | `docs/`    | Design spec and implementation sub-plans |
 
 ## Backend
@@ -46,7 +56,7 @@ and the CLI polls the job until it finishes (avoiding the API Gateway timeout).
 
 - Python 3.10+
 - MySQL 8.0
-- A DeepSeek API key (for the LLM pipeline)
+- A DeepSeek API key, and optionally a Kimi (Moonshot) key, for the LLM pipeline
 
 ### Setup
 
@@ -72,12 +82,20 @@ Optional:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEEPSEEK_API_KEY` | – | LLM key (server-wide; users may also supply their own) |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | Analyst/advisor model |
+| `DEEPSEEK_API_KEY` | – | DeepSeek key (server-wide; users may also supply their own) |
+| `KIMI_API_KEY` | – | Moonshot (Kimi) key, used when a role's model is `kimi-*` |
+| `KIMI_ENDPOINT` | `https://api.moonshot.cn/v1` | Moonshot base URL (intl: `https://api.moonshot.ai/v1`) |
 | `PLANNER_MODEL` | `deepseek-r1` | Planner model |
+| `ANALYST_MODEL` | `DEEPSEEK_MODEL` | Market / news / sector / advisor model |
+| `REVIEWER_MODEL` | `ANALYST_MODEL` | Final-review (HTML assembly) model |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | Fallback model for analyst/reviewer when unset |
+| `LLM_TIMEOUT` | `300` | Per-call LLM timeout (seconds) |
 | `EMAIL_SMTP_HOST` / `EMAIL_SMTP_PORT` | – / `587` | SMTP relay for report emails |
 | `EMAIL_FROM` / `EMAIL_PASSWORD` | – | Sender address and credential |
 | `TIMER_SECRET` | – | Shared secret authenticating the SCF timer call |
+
+Model names must match each provider's actual model IDs (e.g. query Moonshot's
+`GET /v1/models`).
 
 ### Run locally
 
@@ -124,7 +142,7 @@ pusher report get 2026-06-25
 pusher report list
 ```
 
-Point the CLI at a non-default backend with the global `--endpoint <url>` flag.
+Point the CLI at a backend with the global `--endpoint <url>` flag.
 
 ## HTTP API
 
@@ -147,10 +165,22 @@ Auth uses a random 128-char DB-backed bearer token (forgery-resistant, easy to r
 
 ## Deployment
 
-Packaged as a Tencent SCF **web function** (uvicorn via `server/scf_bootstrap`) with
-dependencies shipped as a layer. See [`deploy/README.md`](deploy/README.md) and
-[`deploy/serverless.yml`](deploy/serverless.yml). The Timer trigger runs the pipeline
-daily at 08:00 (Beijing).
+A one-click script deploys the scheduled daily run to Tencent SCF:
+
+```bash
+source deploy/.env        # MYSQL_* / TENCENT_* / DEEPSEEK_* / KIMI_* / EMAIL_* / TIMER_SECRET
+bash deploy/deploy.sh
+```
+
+`deploy.sh` builds the dependencies as a **linux/amd64 Layer**, publishes it to COS, then
+creates/updates an **Event function** (`pusher-pipeline`) and attaches a **daily 08:00
+Timer**. Full details and gotchas are in [`deploy/README.md`](deploy/README.md).
+
+> **Why only the daily run, not the HTTP API?** API Gateway has been discontinued
+> ("停止售卖") on the target account, and SCF HTTP/Web functions accept only `apigw`
+> triggers (no timer). So the cloud deployment runs the pipeline as a timer-driven
+> Event function; the FastAPI HTTP API still runs locally and is fully tested, but is
+> not currently cloud-hosted. Users / portfolios are managed directly via SQL.
 
 > Note: `akshare` / `efinance` / `yfinance` rely on unofficial upstream endpoints —
 > run one real smoke call per library before a first production deploy.
