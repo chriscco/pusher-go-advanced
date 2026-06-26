@@ -1,6 +1,26 @@
 # 部署手册
 
-## 0. 准备
+## 一键部署（推荐）
+
+先建好数据库（见下方第 1 节），export 好机密，然后：
+
+```bash
+export MYSQL_HOST=... MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=pusher
+export TENCENT_SECRET_ID=... TENCENT_SECRET_KEY=...
+export DEEPSEEK_API_KEY=...                 # 其余可选项见脚本顶部
+bash deploy/deploy.sh
+```
+
+`deploy.sh` 会：构建带依赖的函数包（Docker 内装，与运行时对齐）→ 注入环境变量与
+`TIMER_SECRET`（未提供则自动生成）→ `serverless deploy` 出函数 + API 网关 + 每日
+08:00 Timer。**依赖直接打进函数包，无需手动建层上传 layer.zip。**
+
+> 偏好「依赖层」方案的话，跳过本脚本，按下面的分步手册（第 2 节用 `build_layer.sh` +
+> 控制台建层 + `serverless.yml`）操作。
+
+---
+
+## 0. 准备（分步手册）
 - 腾讯云账号，开通 SCF / API 网关 / CDB(MySQL) / COS。
 - 本机安装 Docker（构建依赖层）与 Serverless Framework：`npm i -g serverless`。
 - 配置腾讯云凭证：`export TENCENT_SECRET_ID=... TENCENT_SECRET_KEY=...`。
