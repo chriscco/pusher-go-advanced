@@ -1,14 +1,16 @@
 # 部署手册
 
-## 一键部署（推荐）
+每日日报部署到腾讯云 SCF。**架构** = **Event 函数 `pusher-pipeline` + 每日 08:00 Timer**，
+依赖打成 **Layer**（挂载到 `/opt/python`），函数代码包只含 `app/`。
 
-> **架构说明**：该账号 **API 网关已停售**、HTTP/Web 函数**不能挂 timer**、
-> serverless-tencent 组件在本环境不可用。因此**不走 serverless 组件**，改为直接用
-> SCF SDK 部署。每日日报 = **Event 函数 `pusher-pipeline` + 每日 08:00 Timer**；
-> 依赖打成 **Layer**（挂载到 `/opt/python`），函数代码包只含 `app/`。
-> CLI 的 HTTP API 因 API 网关停售**暂未部署**，用户/持仓暂用 SQL 维护。
+> **为什么不走 serverless 组件 / HTTP 函数？** 该账号 **API 网关已停售**，SCF 的
+> HTTP/Web 函数只能挂 `apigw` 触发器（**不能挂 timer**），且 serverless-tencent 组件
+> 在本环境不可用（v4 需登录、v3 在 CN 被地域限制）。因此改为直接用 **SCF SDK** 部署一个
+> 定时驱动的 Event 函数。CLI 的 HTTP API 因此**暂未上云**，用户/持仓暂用 SQL 维护。
 
-先建好数据库（见下方第 1 节）、装好 Docker 与 `server/.venv`，然后：
+## 一键部署
+
+前置：建好数据库（见下方[数据库](#数据库)）、装好 Docker 与 `server/.venv`，然后：
 
 ```bash
 source deploy/.env          # 内含 MYSQL_* / TENCENT_* / DEEPSEEK_* / KIMI_* / EMAIL_* / TIMER_SECRET
@@ -16,91 +18,74 @@ bash deploy/deploy.sh
 ```
 
 `deploy.sh` 全自动完成：
-1. 在 `python:3.10-slim` **(linux/amd64)** 内装依赖并精简（strip .so、去 pytest、删 tests，
+
+1. 在 `python:3.10-slim` **(linux/amd64)** 内装依赖并精简（strip `.so`、去 pytest、删 tests，
    并把 efinance 缓存目录改到 `/tmp`）→ 打成 `layer.zip`；
 2. 用 `publish_layer.py` 上传 COS 并发布 **Layer 版本**；
 3. 用 `deploy_scf.py` 创建/更新 **Event 函数** 并幂等挂上**每日 Timer**（`TIMER_SECRET`
-   同时注入函数环境变量与触发器 `CustomArgument`，自动一致）。
+   同时注入函数环境变量与触发器 `CustomArgument`，自动保持一致）。
 
-关键约束（已在脚本里处理）：
+脚本可重复执行（幂等）：函数已存在则只更新代码与配置，Timer 先删后建。
 
-- **必须 amd64**：SCF 运行时是 x86_64，Apple Silicon 默认的 arm64 包会让 numpy 等崩溃。
-- **依赖走 Layer**：全打进函数代码包会超 SCF 体积限制。
+## 关键约束（脚本已处理）
+
+- **必须 amd64**：SCF 运行时是 x86_64，Apple Silicon 默认的 arm64 包会让 numpy 等崩溃，
+  故依赖在 `docker run --platform linux/amd64` 内构建。
+- **依赖走 Layer**：全打进函数代码包会超 SCF 体积限制（报「参数与规范不符」）。
 - **`/opt/python` 上 sys.path**：Event 函数不跑 `scf_bootstrap`，且 SCF 禁止设置
-  `PYTHONPATH` 环境变量，故 `scf_event_handler.py` 自行把 `/opt/python` 插入 `sys.path`。
-- **只有 `/tmp` 可写**：handler 里设 `HOME=/tmp`。
+  `PYTHONPATH` 环境变量（`EnvironmentSystemProtect`），故 `scf_event_handler.py` 自行把
+  `/opt/python` 插入 `sys.path`。
+- **只有 `/tmp` 可写**：handler 里设 `HOME=/tmp`，efinance 缓存目录也改到 `/tmp`。
+- **境内 LLM 较慢**：`LLM_TIMEOUT` 默认 300s，整轮约 5-6 分钟（yfinance 拉美股最慢）。
 
-> `serverless.yml` / `build_layer.sh` 及下方「分步手册」为旧的 serverless 组件方案，
-> 在本账号不可用，仅作历史参考。
+## 数据库
 
-### 数据库
+`MYSQL_HOST` 用 TDSQL-C **外网地址**即可（函数默认有公网出口）。建表：本地能连库时
+`mysql -h <host> -u <user> -p pusher < sql/schema.sql`；连不到时用腾讯云 **DMC 控制台**
+的 SQL 窗口执行 `sql/schema.sql`。
 
-`MYSQL_HOST` 用 TDSQL-C **外网地址**即可（函数默认有公网出口）。本地连不到内网库时，
-用腾讯云 **DMC 控制台** 的 SQL 窗口执行 `sql/schema.sql`，或临时开外网地址执行完再关。
+## 环境变量（`deploy/.env`）
+
+`deploy/.env` 已被 `.gitignore` 忽略，**切勿提交机密**。需包含：
+
+```bash
+# 数据库
+MYSQL_HOST=...  MYSQL_PORT=...  MYSQL_USER=root  MYSQL_PASSWORD=...  MYSQL_DATABASE=pusher
+# 腾讯云凭证（部署用）
+TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...
+# LLM：DeepSeek + Kimi(Moonshot) 双供应商，按模型名前缀自动路由（kimi-* → Moonshot）
+DEEPSEEK_API_KEY=...  KIMI_API_KEY=...  KIMI_ENDPOINT=https://api.moonshot.cn/v1
+PLANNER_MODEL=deepseek-v4-pro       # 规划
+ANALYST_MODEL=deepseek-v4-flash     # 市场/新闻/板块/顾问
+REVIEWER_MODEL=kimi-k2.6            # 主编终审
+# 邮件 + 定时密钥
+EMAIL_SMTP_HOST=smtp.qq.com  EMAIL_SMTP_PORT=587  EMAIL_FROM=...  EMAIL_PASSWORD=...
+TIMER_SECRET=$(openssl rand -hex 16)
+```
+
+> 模型名必须与供应商实际型号一致（可用 `GET /v1/models` 查 Moonshot 型号；Moonshot 的
+> 2.7 仅有 code 版，通用写作建议 `kimi-k2.6`）。
+
+## 手动触发与验证
+
+手动异步触发一次（部署脚本结束时也会打印同样的片段）：
+
+```bash
+source deploy/.env
+python - <<'PY'
+import os, json
+from tencentcloud.common import credential
+from tencentcloud.scf.v20180416 import scf_client, models
+cli = scf_client.ScfClient(credential.Credential(
+    os.environ["TENCENT_SECRET_ID"], os.environ["TENCENT_SECRET_KEY"]), "ap-shanghai")
+ir = models.InvokeRequest(); ir.FunctionName = "pusher-pipeline"; ir.InvocationType = "Event"
+ir.ClientContext = json.dumps({"Type": "Timer", "Message": os.environ["TIMER_SECRET"]})
+print(cli.Invoke(ir).Result.FunctionRequestId)
+PY
+```
+
+约 5-6 分钟后，查 `jobs` 表对应 job 为 `done`、`reports` 表有当日记录、并收到日报邮件。
 
 ---
 
-## 0. 准备（分步手册）
-- 腾讯云账号，开通 SCF / API 网关 / CDB(MySQL) / COS。
-- 本机安装 Docker（构建依赖层）与 Serverless Framework：`npm i -g serverless`。
-- 配置腾讯云凭证：`export TENCENT_SECRET_ID=... TENCENT_SECRET_KEY=...`。
-
-## 1. 数据库
-1. 创建 CDB MySQL（最小 1核1G），库名 `pusher`。
-2. 应用建表脚本：
-   ```bash
-   mysql -h <host> -u <user> -p pusher < sql/schema.sql
-   ```
-3. 安全组只放行 SCF 出口网段访问 3306。
-4. （可选）插入初始 RSS 源：
-   ```sql
-   INSERT INTO rss_sources (name, url, category) VALUES
-     ('华尔街见闻', 'https://dedicated-feed-url', 'business');
-   ```
-
-## 2. 依赖层
-```bash
-bash deploy/build_layer.sh           # 产出 deploy/layer.zip
-```
-在 SCF 控制台 → 层管理 → 新建层，运行时 Python3.10，上传 `layer.zip`（>50MB 经 COS）。记下层名 `pusher-deps` 与版本号，回填 `serverless.yml` 的 `layers`。
-
-## 3. 环境变量
-导出全部机密（见 spec §7.2 + `TIMER_SECRET`）：
-```bash
-export MYSQL_HOST=... MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=pusher
-export MYSQL_PORT=3306
-# LLM：DeepSeek + Kimi(Moonshot) 双供应商，按模型名前缀自动路由
-export DEEPSEEK_API_KEY=... KIMI_API_KEY=...
-export KIMI_ENDPOINT=https://api.moonshot.cn/v1            # 国际站用 api.moonshot.ai/v1
-# 各角色模型（kimi-* 走 Moonshot，其余走 DeepSeek）
-export PLANNER_MODEL=deepseek-v4-pro                       # 规划
-export ANALYST_MODEL=deepseek-v4-flash                     # 市场/新闻/板块/顾问
-export REVIEWER_MODEL=kimi-k2.6                            # 主编终审
-export EMAIL_SMTP_HOST=smtp.qq.com EMAIL_SMTP_PORT=587 EMAIL_FROM=... EMAIL_PASSWORD=...
-export TIMER_SECRET=$(openssl rand -hex 16)
-```
-> 模型名必须与供应商 API 实际型号一致（可用 `GET /v1/models` 查 Moonshot 型号；
-> Moonshot 的 2.7 仅有 code 版，通用写作建议用 `kimi-k2.6`）。
-把 `serverless.yml` 里 timer 的 `argument` 改为与 `TIMER_SECRET` 相同的值。
-
-## 4. 部署
-```bash
-cd deploy && serverless deploy
-```
-输出里记下 API 网关 HTTPS 地址。
-
-## 5. 烟测
-```bash
-curl https://<apigw-host>/health        # 期望 {"status":"ok"}
-```
-用 CLI 走通注册→加持仓→触发：
-```bash
-export PUSHER_ENDPOINT=https://<apigw-host>
-pusher register --email you@x.com
-pusher portfolio add-stock 600519 --quantity 100
-pusher trigger run                       # 触发并轮询至 done
-pusher report today
-```
-
-## 6. 验证定时
-等次日 8:00，或在控制台手动触发 timer，确认收到日报邮件、`reports` 表有当日记录、`jobs` 表对应 job 为 done。
+> `serverless.yml` / `build_layer.sh` 为旧的 serverless 组件方案，在本账号不可用，仅作历史参考。
