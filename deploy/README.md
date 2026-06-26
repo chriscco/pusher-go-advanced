@@ -18,6 +18,24 @@ bash deploy/deploy.sh
 > 偏好「依赖层」方案的话，跳过本脚本，按下面的分步手册（第 2 节用 `build_layer.sh` +
 > 控制台建层 + `serverless.yml`）操作。
 
+### 数据库走内网（如 TDSQL-C 只暴露内网地址）
+
+`MYSQL_HOST` 填内网 IP/域名，并把函数绑定到数据库所在的 **VPC + 子网**：
+
+```bash
+export VPC_ID=vpc-xxxx SUBNET_ID=subnet-xxxx   # 见 TDSQL-C 实例「网络信息」
+bash deploy/deploy.sh
+```
+
+注意两点：
+
+- **公网出口**：函数绑定 VPC 后默认无公网出口，需为函数另开「公网访问」或在 VPC
+  挂 NAT 网关，否则 DeepSeek / yfinance / akshare / SMTP / RSS 等外网调用会超时。
+- **建表**：本地连不到内网库，用腾讯云 **DMC 控制台** 的 SQL 窗口执行 `sql/schema.sql`，
+  或临时为 TDSQL-C 开启外网地址执行完再关闭。
+- `vpcConfig` 字段名以你所用 serverless `scf` 组件版本为准，若部署报字段无法识别，
+  改用 `vpc`。
+
 ---
 
 ## 0. 准备（分步手册）

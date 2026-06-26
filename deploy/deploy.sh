@@ -46,6 +46,16 @@ export EMAIL_PASSWORD="${EMAIL_PASSWORD:-}"
 export TIMER_SECRET="${TIMER_SECRET:-$(openssl rand -hex 16)}"
 log "TIMER_SECRET = $TIMER_SECRET （已注入函数环境变量与 Timer argument）"
 
+# 若数据库走内网（如 TDSQL-C 只暴露内网地址），需把函数绑定到同一 VPC/子网。
+# 设置 VPC_ID 与 SUBNET_ID 即自动注入 vpcConfig。
+# 注意: 绑定 VPC 后函数默认无公网出口，需另行为函数开启「公网访问」或挂 NAT，
+#       否则 DeepSeek / yfinance / SMTP / RSS 等外网调用会超时。
+export VPC_ID="${VPC_ID:-}"
+export SUBNET_ID="${SUBNET_ID:-}"
+if { [ -n "$VPC_ID" ] && [ -z "$SUBNET_ID" ]; } || { [ -z "$VPC_ID" ] && [ -n "$SUBNET_ID" ]; }; then
+  die "VPC_ID 与 SUBNET_ID 必须同时设置。"
+fi
+
 # ---- 2. 构建自带依赖的部署包 ----
 log "清理并准备构建目录: $WORK"
 rm -rf "$WORK"
@@ -115,6 +125,19 @@ YML
 # 仅替换非机密的 region 占位符（机密保持 ${env:...} 由 serverless 读取）
 sed -i.bak "s/__REGION__/${REGION}/" "$WORK/serverless.yml" && rm -f "$WORK/serverless.yml.bak"
 
+# 内网数据库：把函数绑定到同一 VPC/子网
+if [ -n "$VPC_ID" ]; then
+  log "绑定 VPC: ${VPC_ID} / ${SUBNET_ID}"
+  awk -v vpc="$VPC_ID" -v sub="$SUBNET_ID" '
+    {print}
+    /^  type: web$/ {
+      print "  vpcConfig:"
+      print "    vpcId: " vpc
+      print "    subnetId: " sub
+    }' "$WORK/serverless.yml" > "$WORK/serverless.yml.tmp" \
+    && mv "$WORK/serverless.yml.tmp" "$WORK/serverless.yml"
+fi
+
 # ---- 4. 部署 ----
 log "serverless deploy（区域 ${REGION}）…"
 ( cd "$WORK" && serverless deploy )
@@ -131,5 +154,9 @@ cat <<EOF
   pusher trigger run
   pusher report today
 
-提醒: 数据库需自行创建并应用 sql/schema.sql；安全组放行 SCF 出口访问 3306。
+提醒:
+  - 数据库需自行创建并应用 sql/schema.sql（内网库可用 DMC 控制台或临时外网地址执行）。
+  - 安全组放行函数所在子网访问 3306。
+  - 若已绑定 VPC（设置了 VPC_ID/SUBNET_ID），记得为函数开启「公网访问」或挂 NAT，
+    否则 DeepSeek / yfinance / SMTP / RSS 等外网调用会超时。
 EOF
