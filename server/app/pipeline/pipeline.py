@@ -67,8 +67,9 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
             )
             email_sender(u["email_to"], f"每日金融日报 {report_date}", html)
             count += 1
-        except Exception:
-            # 单用户失败不影响其他用户
+        except Exception as e:  # noqa: BLE001
+            # 单用户失败不影响其他用户，但要记录原因
+            print(f"[pipeline] 用户 {u.get('email')} 处理失败: {e!r}", file=sys.stderr)
             continue
     return count
 

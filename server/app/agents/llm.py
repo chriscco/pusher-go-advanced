@@ -1,11 +1,15 @@
+import os
+
 import httpx
 from app.config import load_settings
 
 _DEFAULT_ENDPOINT = "https://api.deepseek.com"
+# 境内访问 DeepSeek/Kimi 偶有较高延迟，且终审会生成整篇 HTML，给足超时
+_LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "300"))
 
 
 def _default_poster(url, headers, payload) -> dict:
-    resp = httpx.post(url, headers=headers, json=payload, timeout=120.0)
+    resp = httpx.post(url, headers=headers, json=payload, timeout=_LLM_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
