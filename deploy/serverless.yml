@@ -12,7 +12,7 @@ inputs:
       - __pycache__/**
   handler: scf_bootstrap        # Web 函数：可执行启动脚本
   runtime: Python3.10
-  region: ap-guangzhou
+  region: ap-shanghai
   memorySize: 1024
   timeout: 600
   type: web                     # Web 函数

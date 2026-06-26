@@ -11,18 +11,20 @@ set -euo pipefail
 #   1. export 好机密（见下方 REQUIRED / 可选默认值）
 #   2. bash deploy/deploy.sh
 #
-# 依赖: docker、serverless(Serverless Framework)、rsync、openssl
+# 依赖: docker、components(@serverless/components)、rsync、openssl
+#   注意: 腾讯 SCF 组件需用 @serverless/components 引擎部署（npm i -g @serverless/components），
+#   serverless v3/v4 均不可用；并需 SLS_GEO_LOCATION=no-cn。
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/deploy/.run"
 BUILD="$WORK/build"
-REGION="${SCF_REGION:-ap-guangzhou}"
+REGION="${SCF_REGION:-ap-shanghai}"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---- 1. 前置检查 ----
-for bin in docker serverless rsync openssl; do
+for bin in docker components rsync openssl; do
   command -v "$bin" >/dev/null 2>&1 || die "缺少依赖: $bin"
 done
 docker info >/dev/null 2>&1 || die "Docker 未运行，请先启动 Docker。"
@@ -147,8 +149,8 @@ if [ -n "$VPC_ID" ]; then
 fi
 
 # ---- 4. 部署 ----
-log "serverless deploy（区域 ${REGION}）…"
-( cd "$WORK" && serverless deploy )
+log "components deploy（区域 ${REGION}）…"
+( cd "$WORK" && SLS_GEO_LOCATION=no-cn components deploy )
 
 log "部署完成。"
 cat <<EOF
