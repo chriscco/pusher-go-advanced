@@ -3,31 +3,35 @@ set -euo pipefail
 
 # 一键部署到腾讯云 SCF（Web 函数 + API 网关 + 每日 Timer）。
 #
-# 与 build_layer.sh + serverless.yml 的「依赖层」方案不同，本脚本把依赖
-# 直接打进函数包（与 app/ 同级，scf_bootstrap 已把 /var/user 加入
-# PYTHONPATH），因此无需在控制台手动建层、上传 layer.zip —— 真正一键。
+# 依赖太大装不进函数代码包（SCF 限制），故采用 Layer 方案：
+#   - 依赖打成 Layer（挂载到 /opt/python），自动上传 COS 并发布层版本；
+#   - 函数代码包只含 app/（极小）。
 #
 # 用法:
-#   1. export 好机密（见下方 REQUIRED / 可选默认值）
+#   1. export 好机密（见 deploy/.env / 下方 REQUIRED）
 #   2. bash deploy/deploy.sh
 #
-# 依赖: docker、components(@serverless/components)、rsync、openssl
-#   注意: 腾讯 SCF 组件需用 @serverless/components 引擎部署（npm i -g @serverless/components），
-#   serverless v3/v4 均不可用；并需 SLS_GEO_LOCATION=no-cn。
+# 依赖: docker、components(@serverless/components)、python3+venv、rsync、zip、openssl
+#   注意: 腾讯 SCF 组件需用 @serverless/components 引擎（npm i -g @serverless/components）
+#   + SLS_GEO_LOCATION=no-cn；serverless v3/v4 均不可用。
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/deploy/.run"
-BUILD="$WORK/build"
+LAYER_SRC="$WORK/layer"          # layer/python/<deps>
+BUILD="$WORK/build"              # 仅代码
+VENV="$ROOT/server/.venv"
 REGION="${SCF_REGION:-ap-shanghai}"
+LAYER_NAME="${LAYER_NAME:-pusher-deps}"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---- 1. 前置检查 ----
-for bin in docker components rsync openssl; do
+for bin in docker components rsync zip openssl python3; do
   command -v "$bin" >/dev/null 2>&1 || die "缺少依赖: $bin"
 done
 docker info >/dev/null 2>&1 || die "Docker 未运行，请先启动 Docker。"
+[ -x "$VENV/bin/python" ] || die "缺少 venv: $VENV（先在 server/ 建 .venv）"
 
 REQUIRED=(MYSQL_HOST MYSQL_USER MYSQL_PASSWORD MYSQL_DATABASE
           TENCENT_SECRET_ID TENCENT_SECRET_KEY)
@@ -48,40 +52,61 @@ export EMAIL_SMTP_HOST="${EMAIL_SMTP_HOST:-}"
 export EMAIL_SMTP_PORT="${EMAIL_SMTP_PORT:-587}"
 export EMAIL_FROM="${EMAIL_FROM:-}"
 export EMAIL_PASSWORD="${EMAIL_PASSWORD:-}"
-# 未提供则自动生成一个 Timer 密钥
 export TIMER_SECRET="${TIMER_SECRET:-$(openssl rand -hex 16)}"
 log "TIMER_SECRET = $TIMER_SECRET （已注入函数环境变量与 Timer argument）"
 
-# 若数据库走内网（如 TDSQL-C 只暴露内网地址），需把函数绑定到同一 VPC/子网。
-# 设置 VPC_ID 与 SUBNET_ID 即自动注入 vpcConfig。
-# 注意: 绑定 VPC 后函数默认无公网出口，需另行为函数开启「公网访问」或挂 NAT，
-#       否则 DeepSeek / yfinance / SMTP / RSS 等外网调用会超时。
+# 内网数据库可选 VPC 绑定（注意绑定后需为函数另配公网出口/NAT）
 export VPC_ID="${VPC_ID:-}"
 export SUBNET_ID="${SUBNET_ID:-}"
 if { [ -n "$VPC_ID" ] && [ -z "$SUBNET_ID" ]; } || { [ -z "$VPC_ID" ] && [ -n "$SUBNET_ID" ]; }; then
   die "VPC_ID 与 SUBNET_ID 必须同时设置。"
 fi
 
-# ---- 2. 构建自带依赖的部署包 ----
-log "清理并准备构建目录: $WORK"
-rm -rf "$WORK"
-mkdir -p "$BUILD"
+# ---- 2. 构建依赖层（trim 后约 200MB，含 python/ 目录）----
+log "清理工作目录: $WORK"
+rm -rf "$WORK"; mkdir -p "$LAYER_SRC/python" "$BUILD"
 
-log "复制应用代码（排除 tests/缓存）"
+log "在 python:3.10-slim 容器内安装依赖并精简（strip .so / 去 pytest / 删 tests）"
+docker run --rm --platform linux/amd64 \
+  -v "$LAYER_SRC":/layer \
+  -v "$ROOT/server/requirements.txt":/req.txt:ro \
+  -w /layer python:3.10-slim bash -c '
+    set -e
+    apt-get -qq update >/dev/null 2>&1 && apt-get -qq install -y binutils >/dev/null 2>&1
+    pip install --no-cache-dir -r /req.txt -t /layer/python
+    cd /layer/python
+    rm -rf pytest _pytest pluggy iniconfig py pygments tomli
+    find . -type d -name tests -prune -exec rm -rf {} + 2>/dev/null || true
+    find . -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+    find . -name "*.pyc" -delete 2>/dev/null || true
+    find . -name "*.so*" -exec strip --strip-unneeded {} + 2>/dev/null || true
+    # efinance 在包内硬写缓存目录；SCF 上 /opt 只读，改指 /tmp
+    sed -i "s#DATA_DIR = HERE / \"../data\"#DATA_DIR = Path(\"/tmp/efinance_data\")#" \
+      efinance/config/__init__.py 2>/dev/null || true
+  '
+log "依赖层大小: $(du -sh "$LAYER_SRC/python" | cut -f1)"
+
+log "打包 layer.zip"
+( cd "$LAYER_SRC" && zip -r -q -X "$WORK/layer.zip" python )
+
+# ---- 3. 上传 COS + 发布层版本 ----
+log "确保本机 venv 有 COS/SCF SDK"
+"$VENV/bin/pip" install -q cos-python-sdk-v5 tencentcloud-sdk-python-scf 2>&1 | tail -1 || true
+
+log "上传依赖层到 COS 并发布层版本…"
+export SCF_REGION="$REGION" LAYER_ZIP="$WORK/layer.zip" LAYER_NAME
+LAYER_VERSION="$("$VENV/bin/python" "$ROOT/deploy/publish_layer.py" | sed -n 's/^LAYER_VERSION=//p')"
+[ -n "$LAYER_VERSION" ] || die "发布 Layer 失败（见上方日志）"
+log "Layer: ${LAYER_NAME} 版本 ${LAYER_VERSION}"
+
+# ---- 4. 构建“仅代码”函数包 ----
+log "复制应用代码（不含依赖）"
 rsync -a \
   --exclude 'tests' --exclude '__pycache__' --exclude '.venv' --exclude '*.pyc' \
   "$ROOT/server/" "$BUILD/"
-
-log "在 python:3.10-slim 容器内安装依赖到包根目录（与 SCF 运行时对齐）"
-docker run --rm \
-  -v "$BUILD":/pkg \
-  -v "$ROOT/server/requirements.txt":/req.txt:ro \
-  -w /pkg python:3.10-slim \
-  bash -c "pip install --no-cache-dir -r /req.txt -t ."
-
 chmod +x "$BUILD/scf_bootstrap"
 
-# ---- 3. 生成 serverless 配置（无 layer；机密用 \${env:...} 注入，不落盘）----
+# ---- 5. 生成 serverless.yml（引用 Layer；机密用 ${env:...} 注入，不落盘）----
 log "生成 $WORK/serverless.yml"
 cat > "$WORK/serverless.yml" <<'YML'
 component: scf
@@ -98,6 +123,9 @@ inputs:
   memorySize: 1024
   timeout: 600
   type: web
+  layers:
+    - name: __LAYER_NAME__
+      version: __LAYER_VERSION__
   environment:
     variables:
       MYSQL_HOST: ${env:MYSQL_HOST}
@@ -132,23 +160,21 @@ inputs:
           enable: true
           argument: ${env:TIMER_SECRET}
 YML
-# 仅替换非机密的 region 占位符（机密保持 ${env:...} 由 serverless 读取）
-sed -i.bak "s/__REGION__/${REGION}/" "$WORK/serverless.yml" && rm -f "$WORK/serverless.yml.bak"
+sed -i.bak \
+  -e "s/__REGION__/${REGION}/" \
+  -e "s/__LAYER_NAME__/${LAYER_NAME}/" \
+  -e "s/__LAYER_VERSION__/${LAYER_VERSION}/" \
+  "$WORK/serverless.yml" && rm -f "$WORK/serverless.yml.bak"
 
-# 内网数据库：把函数绑定到同一 VPC/子网
 if [ -n "$VPC_ID" ]; then
   log "绑定 VPC: ${VPC_ID} / ${SUBNET_ID}"
   awk -v vpc="$VPC_ID" -v sub="$SUBNET_ID" '
     {print}
-    /^  type: web$/ {
-      print "  vpcConfig:"
-      print "    vpcId: " vpc
-      print "    subnetId: " sub
-    }' "$WORK/serverless.yml" > "$WORK/serverless.yml.tmp" \
-    && mv "$WORK/serverless.yml.tmp" "$WORK/serverless.yml"
+    /^  type: web$/ { print "  vpcConfig:"; print "    vpcId: " vpc; print "    subnetId: " sub }
+  ' "$WORK/serverless.yml" > "$WORK/serverless.yml.tmp" && mv "$WORK/serverless.yml.tmp" "$WORK/serverless.yml"
 fi
 
-# ---- 4. 部署 ----
+# ---- 6. 部署 ----
 log "components deploy（区域 ${REGION}）…"
 ( cd "$WORK" && SLS_GEO_LOCATION=no-cn components deploy )
 
@@ -163,10 +189,4 @@ cat <<EOF
   pusher portfolio add-stock 600519 --quantity 100
   pusher trigger run
   pusher report today
-
-提醒:
-  - 数据库需自行创建并应用 sql/schema.sql（内网库可用 DMC 控制台或临时外网地址执行）。
-  - 安全组放行函数所在子网访问 3306。
-  - 若已绑定 VPC（设置了 VPC_ID/SUBNET_ID），记得为函数开启「公网访问」或挂 NAT，
-    否则 DeepSeek / yfinance / SMTP / RSS 等外网调用会超时。
 EOF

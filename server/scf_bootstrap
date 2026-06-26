@@ -1,5 +1,6 @@
 #!/bin/bash
 # SCF Web 函数入口：监听 9000。依赖（含 Layer）通常挂载在 /opt，
 # 部署时把 PYTHONPATH 指向 Layer 解压目录。
-export PYTHONPATH="/var/user:/opt:${PYTHONPATH}"
+# /opt/python = Layer 依赖（pip install -t layer/python 的约定目录）
+export PYTHONPATH="/var/user:/opt/python:/opt:${PYTHONPATH}"
 exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 9000
