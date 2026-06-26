@@ -17,7 +17,9 @@ pub fn remove(api: &Api, id: i64) -> Result<()> {
 pub fn list(api: &Api) -> Result<()> {
     for h in api.list_portfolio()? {
         let q = h.quantity.map(|v| v.to_string()).unwrap_or_else(|| "-".into());
-        println!("#{} {} [{}/{}] qty={}", h.id, h.symbol, h.r#type, h.market, q);
+        let name = h.name.as_deref().map(|n| format!(" {n}")).unwrap_or_default();
+        let cost = h.cost_price.map(|v| format!(" cost={v}")).unwrap_or_default();
+        println!("#{} {}{} [{}/{}] qty={}{}", h.id, h.symbol, name, h.r#type, h.market, q, cost);
     }
     Ok(())
 }
