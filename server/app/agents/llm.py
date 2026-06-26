@@ -1,19 +1,35 @@
+import os
+
 import httpx
 from app.config import load_settings
 
 _DEFAULT_ENDPOINT = "https://api.deepseek.com"
+# 境内访问 DeepSeek/Kimi 偶有较高延迟，且终审会生成整篇 HTML，给足超时
+_LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "300"))
 
 
 def _default_poster(url, headers, payload) -> dict:
-    resp = httpx.post(url, headers=headers, json=payload, timeout=120.0)
+    resp = httpx.post(url, headers=headers, json=payload, timeout=_LLM_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
 
+def _provider_for(model, settings) -> tuple:
+    """Pick (api_key, endpoint) from the model name.
+
+    kimi-*/moonshot-* go to Moonshot; everything else to DeepSeek.
+    """
+    name = (model or "").lower()
+    if name.startswith("kimi") or name.startswith("moonshot"):
+        return settings.kimi_api_key, settings.kimi_endpoint
+    return settings.deepseek_api_key, _DEFAULT_ENDPOINT
+
+
 def chat(messages, model, *, api_key=None, endpoint=None, poster=None) -> str:
     s = load_settings()
-    api_key = api_key or s.deepseek_api_key
-    endpoint = (endpoint or _DEFAULT_ENDPOINT).rstrip("/")
+    default_key, default_endpoint = _provider_for(model, s)
+    api_key = api_key or default_key
+    endpoint = (endpoint or default_endpoint).rstrip("/")
     poster = poster or _default_poster
     url = f"{endpoint}/chat/completions"
     headers = {

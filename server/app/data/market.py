@@ -1,4 +1,5 @@
 from app.data.models import IndexQuote, SectorInfo
+from app.data.retry import with_retry
 from app.data.rss import parse_feed, dedup
 
 _INDEX_NAMES = {"上证指数", "深证成指", "创业板指"}
@@ -7,7 +8,7 @@ _INDEX_NAMES = {"上证指数", "深证成指", "创业板指"}
 def get_index_quotes(ak=None) -> list[IndexQuote]:
     if ak is None:
         import akshare as ak
-    df = ak.stock_zh_index_spot_em()
+    df = with_retry(lambda: ak.stock_zh_index_spot_em(), base_delay=0.5)
     out = []
     for _, r in df.iterrows():
         if str(r["名称"]) in _INDEX_NAMES:
@@ -21,7 +22,7 @@ def get_index_quotes(ak=None) -> list[IndexQuote]:
 def get_sector_ranking(ak=None, top=10) -> list[SectorInfo]:
     if ak is None:
         import akshare as ak
-    df = ak.stock_board_industry_name_em()
+    df = with_retry(lambda: ak.stock_board_industry_name_em(), base_delay=0.5)
     out = []
     for _, r in df.head(top).iterrows():
         out.append(SectorInfo(

@@ -1,3 +1,5 @@
+import sys
+
 from app.config import load_settings
 from app.models import user as user_model
 from app.models import portfolio as pf_model
@@ -26,8 +28,9 @@ def _holdings_lines(provider, holdings):
 
 def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int:
     s = load_settings()
-    model = s.deepseek_model
     planner_model = s.planner_model
+    analyst_model = s.analyst_model
+    reviewer_model = s.reviewer_model
 
     indices = bundle["indices"]
     sectors = bundle["sectors"]
@@ -37,16 +40,16 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
     events_text = "\n".join(f"- {n.title}" for n in news)
     outline = agents.run_planner(events_text, overview, chat_fn, planner_model)
 
-    market_section = agents.run_market_analyst(indices, sectors, chat_fn, model)
-    news_section = agents.run_news_editor(news, chat_fn, model)
-    sector_section = agents.run_sector_analyst(sectors, chat_fn, model)
+    market_section = agents.run_market_analyst(indices, sectors, chat_fn, analyst_model)
+    news_section = agents.run_news_editor(news, chat_fn, analyst_model)
+    sector_section = agents.run_sector_analyst(sectors, chat_fn, analyst_model)
 
     count = 0
     for u in user_model.list_all_users():
         try:
             holdings = pf_model.list_portfolios(u["id"])
             advisor_section = agents.run_advisor(
-                u["email"], _holdings_lines(provider, holdings), chat_fn, model
+                u["email"], _holdings_lines(provider, holdings), chat_fn, analyst_model
             )
             html = agents.run_reviewer(
                 outline,
@@ -56,7 +59,7 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
                     "sector": sector_section,
                     "advisor": advisor_section,
                 },
-                chat_fn, model,
+                chat_fn, reviewer_model,
             )
             report_model.save_report(
                 u["id"], report_date, html,
@@ -64,10 +67,20 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
             )
             email_sender(u["email_to"], f"每日金融日报 {report_date}", html)
             count += 1
-        except Exception:
-            # 单用户失败不影响其他用户
+        except Exception as e:  # noqa: BLE001
+            # 单用户失败不影响其他用户，但要记录原因
+            print(f"[pipeline] 用户 {u.get('email')} 处理失败: {e!r}", file=sys.stderr)
             continue
     return count
+
+
+def _safe_source(label, fn, default):
+    """单个数据源失败不影响整体：记录并降级为默认值（graceful degradation）。"""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 — 外部数据源各异，统一兜底
+        print(f"[pipeline] 数据源 {label} 获取失败，降级为空: {e!r}", file=sys.stderr)
+        return default
 
 
 def _default_runner():
@@ -79,9 +92,9 @@ def _default_runner():
 
     provider = MarketDataProvider(AkSource(), EfSource(), YfSource())
     bundle = {
-        "indices": market.get_index_quotes(),
-        "sectors": market.get_sector_ranking(),
-        "news": market.fetch_news(_load_rss_sources()),
+        "indices": _safe_source("indices", market.get_index_quotes, []),
+        "sectors": _safe_source("sectors", market.get_sector_ranking, []),
+        "news": _safe_source("news", lambda: market.fetch_news(_load_rss_sources()), []),
     }
     report_date = beijing_today()
     run_pipeline(

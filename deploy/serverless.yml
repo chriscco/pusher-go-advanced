@@ -12,7 +12,7 @@ inputs:
       - __pycache__/**
   handler: scf_bootstrap        # Web 函数：可执行启动脚本
   runtime: Python3.10
-  region: ap-guangzhou
+  region: ap-shanghai
   memorySize: 1024
   timeout: 600
   type: web                     # Web 函数
@@ -27,8 +27,12 @@ inputs:
       MYSQL_PASSWORD: ${env:MYSQL_PASSWORD}
       MYSQL_DATABASE: ${env:MYSQL_DATABASE}
       DEEPSEEK_API_KEY: ${env:DEEPSEEK_API_KEY}
+      KIMI_API_KEY: ${env:KIMI_API_KEY}
+      KIMI_ENDPOINT: ${env:KIMI_ENDPOINT}
       DEEPSEEK_MODEL: ${env:DEEPSEEK_MODEL}
       PLANNER_MODEL: ${env:PLANNER_MODEL}
+      ANALYST_MODEL: ${env:ANALYST_MODEL}
+      REVIEWER_MODEL: ${env:REVIEWER_MODEL}
       EMAIL_SMTP_HOST: ${env:EMAIL_SMTP_HOST}
       EMAIL_SMTP_PORT: ${env:EMAIL_SMTP_PORT}
       EMAIL_FROM: ${env:EMAIL_FROM}
