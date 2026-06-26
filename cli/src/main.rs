@@ -8,9 +8,15 @@ use clap::{Parser, Subcommand};
 use commands::resolve_endpoint;
 use config::Config;
 
+/// pusher — AI daily-report pusher CLI.
+///
+/// Manage your account and portfolio, trigger the multi-agent analysis
+/// pipeline, and read the daily reports it emails out. The auth token and
+/// default endpoint are stored in ~/.pusher/config.toml.
 #[derive(Parser)]
-#[command(name = "pusher")]
+#[command(name = "pusher", version, about, long_about = None)]
 struct Cli {
+    /// Backend base URL (overrides the saved endpoint), e.g. https://host
     #[arg(long, global = true)]
     endpoint: Option<String>,
     #[command(subcommand)]
@@ -19,36 +25,89 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Register { #[arg(long)] email: String },
-    Login { #[arg(long)] email: String },
+    /// Create an account and save the returned auth token
+    Register {
+        /// Email address to register
+        #[arg(long)]
+        email: String,
+    },
+    /// Log in with an existing account and save the auth token
+    Login {
+        /// Registered email address
+        #[arg(long)]
+        email: String,
+    },
+    /// Clear the saved auth token from ~/.pusher/config.toml
     Logout,
-    Portfolio { #[command(subcommand)] action: PortfolioCmd },
-    Report { #[command(subcommand)] action: ReportCmd },
-    Trigger { #[command(subcommand)] action: TriggerCmd },
+    /// Manage the holdings analyzed in your daily report
+    Portfolio {
+        #[command(subcommand)]
+        action: PortfolioCmd,
+    },
+    /// Read the daily analysis reports
+    Report {
+        #[command(subcommand)]
+        action: ReportCmd,
+    },
+    /// Run the report pipeline on demand
+    Trigger {
+        #[command(subcommand)]
+        action: TriggerCmd,
+    },
 }
 
 #[derive(Subcommand)]
 enum PortfolioCmd {
-    AddStock { code: String,
-        #[arg(long, default_value = "cn")] market: String,
-        #[arg(long)] quantity: Option<f64>,
-        #[arg(long)] cost: Option<f64> },
-    AddFund { code: String,
-        #[arg(long)] quantity: Option<f64>,
-        #[arg(long)] cost: Option<f64> },
-    Remove { id: i64 },
+    /// Add a stock holding (quantity/cost optional; weight is derived)
+    AddStock {
+        /// Ticker / code, e.g. 600519 or AAPL
+        code: String,
+        /// Market: cn, hk, or us
+        #[arg(long, default_value = "cn")]
+        market: String,
+        /// Shares held (optional)
+        #[arg(long)]
+        quantity: Option<f64>,
+        /// Average cost price per share (optional)
+        #[arg(long)]
+        cost: Option<f64>,
+    },
+    /// Add a fund holding (China funds; market is always cn)
+    AddFund {
+        /// Fund code, e.g. 012345
+        code: String,
+        /// Units held (optional)
+        #[arg(long)]
+        quantity: Option<f64>,
+        /// Average cost per unit (optional)
+        #[arg(long)]
+        cost: Option<f64>,
+    },
+    /// Remove a holding by its id (see `portfolio list`)
+    Remove {
+        /// Holding id to remove
+        id: i64,
+    },
+    /// List your holdings
     List,
 }
 
 #[derive(Subcommand)]
 enum ReportCmd {
+    /// Show today's report
     Today,
-    Get { date: String },
+    /// Show the report for a given date (YYYY-MM-DD)
+    Get {
+        /// Report date, e.g. 2026-06-25
+        date: String,
+    },
+    /// List the dates that have a report
     List,
 }
 
 #[derive(Subcommand)]
 enum TriggerCmd {
+    /// Start a report job and poll until it finishes
     Run,
 }
 
