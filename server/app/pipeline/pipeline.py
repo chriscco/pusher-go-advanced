@@ -26,8 +26,9 @@ def _holdings_lines(provider, holdings):
 
 def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int:
     s = load_settings()
-    model = s.deepseek_model
     planner_model = s.planner_model
+    analyst_model = s.analyst_model
+    reviewer_model = s.reviewer_model
 
     indices = bundle["indices"]
     sectors = bundle["sectors"]
@@ -37,16 +38,16 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
     events_text = "\n".join(f"- {n.title}" for n in news)
     outline = agents.run_planner(events_text, overview, chat_fn, planner_model)
 
-    market_section = agents.run_market_analyst(indices, sectors, chat_fn, model)
-    news_section = agents.run_news_editor(news, chat_fn, model)
-    sector_section = agents.run_sector_analyst(sectors, chat_fn, model)
+    market_section = agents.run_market_analyst(indices, sectors, chat_fn, analyst_model)
+    news_section = agents.run_news_editor(news, chat_fn, analyst_model)
+    sector_section = agents.run_sector_analyst(sectors, chat_fn, analyst_model)
 
     count = 0
     for u in user_model.list_all_users():
         try:
             holdings = pf_model.list_portfolios(u["id"])
             advisor_section = agents.run_advisor(
-                u["email"], _holdings_lines(provider, holdings), chat_fn, model
+                u["email"], _holdings_lines(provider, holdings), chat_fn, analyst_model
             )
             html = agents.run_reviewer(
                 outline,
@@ -56,7 +57,7 @@ def run_pipeline(*, bundle, provider, chat_fn, email_sender, report_date) -> int
                     "sector": sector_section,
                     "advisor": advisor_section,
                 },
-                chat_fn, model,
+                chat_fn, reviewer_model,
             )
             report_model.save_report(
                 u["id"], report_date, html,

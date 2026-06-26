@@ -67,10 +67,18 @@ bash deploy/build_layer.sh           # 产出 deploy/layer.zip
 ```bash
 export MYSQL_HOST=... MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DATABASE=pusher
 export MYSQL_PORT=3306
-export DEEPSEEK_API_KEY=... DEEPSEEK_MODEL=deepseek-chat PLANNER_MODEL=deepseek-r1
-export EMAIL_SMTP_HOST=smtp.gmail.com EMAIL_SMTP_PORT=587 EMAIL_FROM=... EMAIL_PASSWORD=...
+# LLM：DeepSeek + Kimi(Moonshot) 双供应商，按模型名前缀自动路由
+export DEEPSEEK_API_KEY=... KIMI_API_KEY=...
+export KIMI_ENDPOINT=https://api.moonshot.cn/v1            # 国际站用 api.moonshot.ai/v1
+# 各角色模型（kimi-* 走 Moonshot，其余走 DeepSeek）
+export PLANNER_MODEL=deepseek-v4-pro                       # 规划
+export ANALYST_MODEL=deepseek-v4-flash                     # 市场/新闻/板块/顾问
+export REVIEWER_MODEL=kimi-k2.6                            # 主编终审
+export EMAIL_SMTP_HOST=smtp.qq.com EMAIL_SMTP_PORT=587 EMAIL_FROM=... EMAIL_PASSWORD=...
 export TIMER_SECRET=$(openssl rand -hex 16)
 ```
+> 模型名必须与供应商 API 实际型号一致（可用 `GET /v1/models` 查 Moonshot 型号；
+> Moonshot 的 2.7 仅有 code 版，通用写作建议用 `kimi-k2.6`）。
 把 `serverless.yml` 里 timer 的 `argument` 改为与 `TIMER_SECRET` 相同的值。
 
 ## 4. 部署

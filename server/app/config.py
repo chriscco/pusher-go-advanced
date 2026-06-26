@@ -12,8 +12,12 @@ class Settings:
     mysql_password: str
     mysql_database: str
     deepseek_api_key: str
+    kimi_api_key: str
+    kimi_endpoint: str
     deepseek_model: str
     planner_model: str
+    analyst_model: str
+    reviewer_model: str
     email_smtp_host: str
     email_smtp_port: int
     email_from: str
@@ -33,8 +37,17 @@ def load_settings() -> Settings:
         mysql_password=os.environ["MYSQL_PASSWORD"],
         mysql_database=os.environ["MYSQL_DATABASE"],
         deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+        kimi_api_key=os.environ.get("KIMI_API_KEY", ""),
+        kimi_endpoint=os.environ.get("KIMI_ENDPOINT", "https://api.moonshot.cn/v1"),
         deepseek_model=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
         planner_model=os.environ.get("PLANNER_MODEL", "deepseek-r1"),
+        analyst_model=os.environ.get(
+            "ANALYST_MODEL", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+        ),
+        reviewer_model=os.environ.get(
+            "REVIEWER_MODEL",
+            os.environ.get("ANALYST_MODEL", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")),
+        ),
         email_smtp_host=os.environ.get("EMAIL_SMTP_HOST", ""),
         email_smtp_port=int(os.environ.get("EMAIL_SMTP_PORT", "587")),
         email_from=os.environ.get("EMAIL_FROM", ""),

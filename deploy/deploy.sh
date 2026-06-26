@@ -36,8 +36,12 @@ for v in "${REQUIRED[@]}"; do [ -n "${!v:-}" ] || missing+=("$v"); done
 # 可选项默认值
 export MYSQL_PORT="${MYSQL_PORT:-3306}"
 export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}"
+export KIMI_API_KEY="${KIMI_API_KEY:-}"
+export KIMI_ENDPOINT="${KIMI_ENDPOINT:-https://api.moonshot.cn/v1}"
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-chat}"
 export PLANNER_MODEL="${PLANNER_MODEL:-deepseek-r1}"
+export ANALYST_MODEL="${ANALYST_MODEL:-${DEEPSEEK_MODEL}}"
+export REVIEWER_MODEL="${REVIEWER_MODEL:-${ANALYST_MODEL}}"
 export EMAIL_SMTP_HOST="${EMAIL_SMTP_HOST:-}"
 export EMAIL_SMTP_PORT="${EMAIL_SMTP_PORT:-587}"
 export EMAIL_FROM="${EMAIL_FROM:-}"
@@ -100,8 +104,12 @@ inputs:
       MYSQL_PASSWORD: ${env:MYSQL_PASSWORD}
       MYSQL_DATABASE: ${env:MYSQL_DATABASE}
       DEEPSEEK_API_KEY: ${env:DEEPSEEK_API_KEY}
+      KIMI_API_KEY: ${env:KIMI_API_KEY}
+      KIMI_ENDPOINT: ${env:KIMI_ENDPOINT}
       DEEPSEEK_MODEL: ${env:DEEPSEEK_MODEL}
       PLANNER_MODEL: ${env:PLANNER_MODEL}
+      ANALYST_MODEL: ${env:ANALYST_MODEL}
+      REVIEWER_MODEL: ${env:REVIEWER_MODEL}
       EMAIL_SMTP_HOST: ${env:EMAIL_SMTP_HOST}
       EMAIL_SMTP_PORT: ${env:EMAIL_SMTP_PORT}
       EMAIL_FROM: ${env:EMAIL_FROM}
