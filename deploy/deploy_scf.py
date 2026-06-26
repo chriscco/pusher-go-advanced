@@ -175,6 +175,22 @@ def main() -> int:
             os.environ.get("TIMER_CRON", "0 0 8 * * * *"),
         )
 
+    # Web 函数：报出函数 URL。函数 URL 是 API 网关停售后的官方替代，需在控制台为该
+    # 函数手动启用一次（授权类型『开放』）。SDK 3.1.100 既不能开启、也读不到它
+    # （AccessInfo.Host 仍为空），故地址永久不变后写入 deploy/.env 的 API_FUNCTION_URL 复用。
+    if fn_type == "HTTP":
+        _wait_active(cli, fn)
+        g = models.GetFunctionRequest()
+        g.FunctionName = fn
+        host = (cli.GetFunction(g).AccessInfo.Host or "").strip()
+        url = f"https://{host}" if host else os.environ.get("API_FUNCTION_URL", "").strip()
+        if url:
+            print(f"FUNCTION_URL={url}")
+        else:
+            print("[scf] 函数 URL 未启用/读不到：请在控制台为该函数开启「函数 URL」"
+                  "（授权类型『开放』），并把地址写入 deploy/.env 的 API_FUNCTION_URL。",
+                  file=sys.stderr)
+
     print(f"FUNCTION={fn}")
     return 0
 

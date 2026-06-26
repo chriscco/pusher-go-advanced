@@ -22,6 +22,7 @@ PY="$VENV/bin/python"
 REGION="${SCF_REGION:-ap-shanghai}"
 LAYER_NAME="${LAYER_NAME:-pusher-deps}"
 FUNCTION_NAME="${FUNCTION_NAME:-pusher-pipeline}"
+API_FUNCTION_NAME="${API_FUNCTION_NAME:-pusher-go-advanced}"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -97,17 +98,45 @@ rsync -a --exclude 'tests' --exclude '__pycache__' --exclude '.venv' --exclude '
   "$ROOT/server/" "$BUILD/"
 chmod +x "$BUILD/scf_bootstrap"
 
-# ---- 5. 部署 Event 函数 + 每日 Timer ----
-log "部署 Event 函数 ${FUNCTION_NAME} 并挂载每日 Timer…"
+# ---- 5a. 部署 Event 函数（日报流水线）+ 每日 Timer ----
 export CODE_DIR="$BUILD" LAYER_VERSION
-export FUNCTION_TYPE=Event FUNCTION_HANDLER=scf_event_handler.main_handler
-export ENSURE_TIMER=1 TIMER_CRON="${TIMER_CRON:-0 0 8 * * * *}"
-"$PY" "$ROOT/deploy/deploy_scf.py"
+log "部署 Event 函数 ${FUNCTION_NAME} 并挂载每日 Timer…"
+FUNCTION_NAME="$FUNCTION_NAME" FUNCTION_TYPE=Event \
+  FUNCTION_HANDLER=scf_event_handler.main_handler \
+  ENSURE_TIMER=1 TIMER_CRON="${TIMER_CRON:-0 0 8 * * * *}" \
+  "$PY" "$ROOT/deploy/deploy_scf.py"
+
+# ---- 5b. 部署 Web/API 函数（CLI 的 HTTP 接口，经函数 URL 暴露）----
+# API 网关停售后用「函数 URL」暴露 Web 函数：scf_bootstrap 跑 uvicorn:9000。
+# 函数 URL 需在控制台为该函数手动启用一次（授权类型选「开放」）；SDK 暂不支持开启，
+# 但 deploy_scf.py 会读回 AccessInfo.Host 打印出 FUNCTION_URL。
+log "部署 Web 函数 ${API_FUNCTION_NAME}（CLI HTTP API）…"
+API_OUT="$(FUNCTION_NAME="$API_FUNCTION_NAME" FUNCTION_TYPE=HTTP \
+  FUNCTION_HANDLER=scf_bootstrap ENSURE_TIMER=0 \
+  "$PY" "$ROOT/deploy/deploy_scf.py" | tee /dev/stderr)"
+API_URL="$(printf '%s\n' "$API_OUT" | sed -n 's/^FUNCTION_URL=//p' | head -1)"
 
 log "部署完成。每日 08:00（北京）自动跑日报。"
+echo
+if [ -n "$API_URL" ]; then
+  log "CLI HTTP API 地址（函数 URL）: ${API_URL}"
+  cat <<EOF
+把 CLI 指向它（写入 ~/.pusher/config.toml 的 server.endpoint，或用 --endpoint）:
+  printf '[server]\nendpoint = "%s"\n\n[auth]\ntoken = ""\nemail = ""\n' "${API_URL}" > ~/.pusher/config.toml
+然后:
+  pusher register --email you@example.com
+  pusher portfolio add-stock 600519 --quantity 100 --cost 1600
+  pusher trigger run && pusher report today
+EOF
+else
+  cat <<EOF
+Web 函数已部署，但还没启用「函数 URL」。请在 SCF 控制台 → 函数 ${API_FUNCTION_NAME}
+→ 启用「函数 URL」（授权类型选「开放」），然后重跑本脚本即可读回地址并接入 CLI。
+EOF
+fi
+echo
 cat <<EOF
-
-手动触发一次（异步）并看结果:
+手动触发日报一次（异步）并看结果:
   source deploy/.env
   "$PY" - <<'PYEOF'
 import os, json
@@ -120,6 +149,4 @@ ir.ClientContext = json.dumps({"Type":"Timer","Message":os.environ["TIMER_SECRET
 print(cli.Invoke(ir).Result.FunctionRequestId)
 PYEOF
   # 然后查 jobs/reports 表确认（运行约 5-6 分钟）
-
-注意: CLI 的 HTTP API 未部署（该账号 API 网关停售）；用户/持仓暂用 SQL 维护。
 EOF

@@ -23,8 +23,11 @@ def test_load_settings_reads_mysql_env(monkeypatch):
 def test_load_settings_defaults_for_optional(monkeypatch):
     for key in ("MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"):
         monkeypatch.setenv(key, "x")
-    monkeypatch.delenv("MYSQL_PORT", raising=False)
-    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    # Clear every optional var so the test sees true defaults even when the
+    # ambient env (e.g. a sourced deploy/.env) sets them.
+    for key in ("MYSQL_PORT", "DEEPSEEK_MODEL", "PLANNER_MODEL",
+                "ANALYST_MODEL", "REVIEWER_MODEL"):
+        monkeypatch.delenv(key, raising=False)
 
     s = load_settings()
 
